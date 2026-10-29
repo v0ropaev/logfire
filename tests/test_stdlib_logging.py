@@ -241,6 +241,69 @@ def test_stdlib_logging_single_string_tag(exporter: TestExporter, logger: Logger
     assert span['attributes']['logfire.tags'] == ('production',)
 
 
+@contextmanager
+def non_propagating_logger(handler: logging.Handler):
+    # pytest's own handlers on the root logger re-raise logging errors, so keep records away from them.
+    logger = getLogger(f'{__name__}.non_propagating')
+    logger.propagate = False
+    logger.addHandler(handler)
+    try:
+        yield logger
+    finally:
+        logger.removeHandler(handler)
+        logger.propagate = True
+
+
+def test_stdlib_logging_bad_format_args(exporter: TestExporter, capsys: pytest.CaptureFixture[str]) -> None:
+    with non_propagating_logger(LogfireLoggingHandler()) as logger:
+        # These must not raise, the errors are passed to `handleError` like in the standard library handlers.
+        logger.error('value %d', 'abc')
+        logger.error('%s and %s', 'one')
+        logger.error('%(user)s', {'id': 1})
+        logger.error('fine %s', 'afterwards')
+
+    assert exporter.exported_spans_as_dict(fixed_line_number=None) == snapshot(
+        [
+            {
+                'name': 'fine %s',
+                'context': {'trace_id': 1, 'span_id': 1, 'is_remote': False},
+                'parent': None,
+                'start_time': 1000000000,
+                'end_time': 1000000000,
+                'attributes': {
+                    'logfire.span_type': 'log',
+                    'logfire.level_num': 17,
+                    'logfire.msg_template': 'fine %s',
+                    'logfire.msg': 'fine afterwards',
+                    'code.filepath': 'test_stdlib_logging.py',
+                    'code.function': 'test_stdlib_logging_bad_format_args',
+                    'code.lineno': IsPositiveInt(),
+                    'logfire.logger_name': 'tests.test_stdlib_logging.non_propagating',
+                    'logfire.logging_args': '["afterwards"]',
+                    'logfire.json_schema': '{"type":"object","properties":{"logfire.logger_name":{},"logfire.logging_args":{"type":"array","x-python-datatype":"tuple"}}}',
+                },
+            }
+        ]
+    )
+
+    stderr = capsys.readouterr().err
+    assert stderr.count('--- Logging error ---') == 3
+    assert 'TypeError: %d format: a real number is required, not str' in stderr
+    assert 'TypeError: not enough arguments for format string' in stderr
+    assert "KeyError: 'user'" in stderr
+
+
+def test_stdlib_logging_recursion_error() -> None:
+    class Recursive:
+        def __str__(self) -> str:
+            return str(self)
+
+    # RecursionError is re-raised rather than passed to `handleError`, like in the standard library handlers.
+    with non_propagating_logger(LogfireLoggingHandler()) as logger:
+        with pytest.raises(RecursionError):
+            logger.error('%s', Recursive())
+
+
 class MockLoggingHandler(logging.Handler):
     def __init__(self):
         super().__init__()

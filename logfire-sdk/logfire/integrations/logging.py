@@ -78,6 +78,9 @@ class LogfireLoggingHandler(LoggingHandler):
     def emit(self, record: LogRecord) -> None:
         """Send the log to Logfire.
 
+        Like the handlers in the standard library, errors such as a message that doesn't match its arguments
+        are passed to [`handleError`][logging.Handler.handleError] instead of being raised to the caller.
+
         Args:
             record: The log record to send.
         """
@@ -85,18 +88,23 @@ class LogfireLoggingHandler(LoggingHandler):
             self.fallback.handle(record)
             return
 
-        attributes = self.fill_attributes(record)
-        tags = attributes.pop(ATTRIBUTES_TAGS_KEY, None)
-        if isinstance(tags, str):
-            tags = (tags,)
+        try:
+            attributes = self.fill_attributes(record)
+            tags = attributes.pop(ATTRIBUTES_TAGS_KEY, None)
+            if isinstance(tags, str):
+                tags = (tags,)
 
-        self.logfire_instance.log(
-            msg_template=attributes.pop(ATTRIBUTES_MESSAGE_TEMPLATE_KEY, record.msg),
-            level=LOGGING_TO_OTEL_LEVEL_NUMBERS.get(record.levelno, record.levelno),
-            attributes=attributes,
-            tags=tags,
-            exc_info=record.exc_info,
-        )
+            self.logfire_instance.log(
+                msg_template=attributes.pop(ATTRIBUTES_MESSAGE_TEMPLATE_KEY, record.msg),
+                level=LOGGING_TO_OTEL_LEVEL_NUMBERS.get(record.levelno, record.levelno),
+                attributes=attributes,
+                tags=tags,
+                exc_info=record.exc_info,
+            )
+        except RecursionError:  # Like the standard library handlers, see https://bugs.python.org/issue36272
+            raise
+        except Exception:
+            self.handleError(record)
 
     def fill_attributes(self, record: LogRecord) -> dict[str, Any]:
         """Fill the attributes to send to Logfire.
