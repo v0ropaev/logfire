@@ -171,3 +171,10 @@ def test_structlog_tags_merged_with_instance_tags(exporter: TestExporter) -> Non
 
     [span] = exporter.exported_spans_as_dict()
     assert span['attributes']['logfire.tags'] == ('instance', 'foo')
+
+
+def test_structlog_critical(exporter: TestExporter, logger: structlog.BoundLogger) -> None:
+    logger.critical('critical')
+    logger.fatal('fatal')
+
+    assert [span['attributes']['logfire.level_num'] for span in exporter.exported_spans_as_dict()] == [21, 21]
